@@ -1,4 +1,4 @@
-#pragma kernel CSMain /*FOG_ELLIPSOIDS*/ ANISOTROPY POINT_LIGHTS DIR_LIGHT DIR_LIGHT_SHADOWS /*FOG_BOMB*/ /*ATTENUATION_LEGACY*/ 
+#pragma kernel CSMain FOG_ELLIPSOIDS ANISOTROPY POINT_LIGHTS DIR_LIGHT DIR_LIGHT_SHADOWS /*FOG_BOMB*/ /*ATTENUATION_LEGACY*/ FLIP_SHADOWS
 
 float3 _FroxelResolution;
 RWTexture3D<half4> _VolumeInject;
@@ -266,7 +266,11 @@ float ChebyshevUpperBound(float2 moments, float mean)
 	float pMax = variance / (variance + (d * d));
 
 	// One-tailed Chebyshev
+#ifdef FLIP_SHADOWS
 	return (mean >= moments.x ? 1.0f : pMax);
+#else
+	return (mean <= moments.x ? 1.0f : pMax);
+#endif
 }
 
 float4 getCascadeWeights_splitSpheres(float3 pos)

@@ -27,16 +27,16 @@ public class VolumetricFog : MonoBehaviour
 	public float m_NearClip = 0.1f;
 	[MinValue(0.1f)]
 	public float m_FarClipMax = 100.0f;
+	[SerializeField]
+	private Vector3Int froxelResolution = new Vector3Int(160, 90, 128);
 
 	[Header("Fog Density")]
 	[FormerlySerializedAs("m_Density")]
 	public float m_GlobalDensityMult = 1.0f;
-	Vector3i m_InjectNumThreads = new Vector3i(16, 2, 16);
-	Vector3i m_ScatterNumThreads = new Vector3i(32, 2, 1);
+	Vector3Int m_InjectNumThreads = new Vector3Int(16, 2, 16);
+	Vector3Int m_ScatterNumThreads = new Vector3Int(32, 2, 1);
 	RenderTexture m_VolumeInject;
 	RenderTexture m_VolumeScatter;
-	[SerializeField]
-	private Vector3Int froxelResolution = new Vector3Int(160, 90, 128);
 	Camera m_Camera;
 
 	// Density
@@ -62,6 +62,9 @@ public class VolumetricFog : MonoBehaviour
 	public Color m_AmbientLightColor = Color.white;
 
 	[Header("Debug")]
+	public int m_AntiAliasing = 1;
+	public FilterMode m_FilterMode = FilterMode.Bilinear;
+	public bool m_ShowFroxelSlices = false;
 	private Material m_DebugMaterial;
 	[HideInInspector]
 	public Shader m_DebugShader;
@@ -70,19 +73,6 @@ public class VolumetricFog : MonoBehaviour
 	[HideInInspector]
 	[Range(0.0f, 1.0f)]
 	public float m_Z = 1.0f;
-	public int m_VolumeAA = 0;
-	public FilterMode m_FilterMode = FilterMode.Bilinear;
-
-	struct Vector3i
-	{
-		public int x, y, z;
-		public Vector3i(int x, int y, int z)
-		{
-			this.x = x;
-			this.y = y;
-			this.z = z;
-		}
-	}
 
 	struct PointLightParams
 	{
@@ -485,7 +475,7 @@ public class VolumetricFog : MonoBehaviour
 		volume.volumeDepth = froxelResolution.z;
 		volume.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
 		volume.enableRandomWrite = true;
-		volume.antiAliasing = m_VolumeAA;
+		volume.antiAliasing = m_AntiAliasing;
 		volume.filterMode = m_FilterMode;
 		volume.Create();
 	}
@@ -566,8 +556,19 @@ public class VolumetricFog : MonoBehaviour
 
 	void OnDrawGizmosSelected()
 	{
-		Gizmos.color = Color.yellow;
 		Gizmos.matrix = transform.localToWorldMatrix;
+
+		if (m_ShowFroxelSlices)
+		{
+			Gizmos.color = Color.yellow * 0.25f;
+
+			for (int i = 0; i < froxelResolution.z; i++)
+			{
+				Gizmos.DrawFrustum(Vector3.zero, cam.fieldOfView, farClip / froxelResolution.z * i, nearClip, cam.aspect);
+			}
+		}
+
+		Gizmos.color = Color.yellow;
 		Gizmos.DrawFrustum(Vector3.zero, cam.fieldOfView, farClip, nearClip, cam.aspect);
 	}
 
