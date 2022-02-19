@@ -2,15 +2,15 @@
 // https://bartwronski.com/publications/
 
 #pragma kernel CSMain
-#define VOLUME_DEPTH 128.0
 
+float3 _FroxelResolution;
 Texture3D _VolumeInject;
 RWTexture3D<float4> _VolumeScatter;
 
 float4 ScatterStep(float3 accumulatedLight, float accumulatedTransmittance, float3 sliceLight, float sliceDensity)
 {
 	sliceDensity = max(sliceDensity, 0.000001);
-	float  sliceTransmittance = exp(-sliceDensity / VOLUME_DEPTH);
+	float sliceTransmittance = exp(-sliceDensity / _FroxelResolution.z);
 
 	// Seb Hillaire's improved transmission by calculating an integral over slice depth instead of
 	// constant per slice value. Light still constant per slice, but that's acceptable. See slide 28 of
@@ -30,7 +30,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 	// Store transmission in .a, as opposed to density in _VolumeInject
 	float4 accum = float4(0, 0, 0, 1);
 	uint3 pos = uint3(id.xy, 0);
-	uint steps = VOLUME_DEPTH;
+	uint steps = _FroxelResolution.z;
 
 	for(uint z = 0; z < steps; z++)
 	{

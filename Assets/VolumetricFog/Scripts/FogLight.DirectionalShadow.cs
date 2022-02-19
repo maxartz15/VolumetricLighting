@@ -102,6 +102,7 @@ public partial class FogLight : LightOverride
 				// This step should convert to ESM/VSM
 				// m_BufGrabShadowmap.Blit(shadowmap, targetRT);
 				m_BufGrabShadowmap.SetGlobalTexture("_DirShadowmap", shadowmap);
+				m_BufGrabShadowmap.SetGlobalVector("_ZParams", GetZParams());
 				m_BufGrabShadowmap.Blit(null, targetRT, m_BlurShadowmapMaterial, /*sample & convert to VSM*/ 4);
 			}
 			else
@@ -116,6 +117,14 @@ public partial class FogLight : LightOverride
 		//m_BufGrabShadowmap.GetTemporaryRT(directionalShadowmapBlurred, 1024, 1024, 0, FilterMode.Bilinear, RenderTextureFormat.RFloat, RenderTextureReadWrite.Linear);
 		//m_BufGrabShadowmap.Blit(shadowmap, m_Shadowmap);
 		//m_BufGrabShadowmap.SetGlobalTexture(directionalShadowmapBlurred, directionalShadowmapBlurred);
+	}
+
+	private Vector4 GetZParams()
+	{
+		Light light = GetComponent<Light>();
+		float n = light.shadowNearPlane;
+		float f = light.range;
+		return new Vector4((n - f) / n, f / n, (n - f) / (n * f), 1 / n);
 	}
 
 	void CleanupDirectionalShadowmap()

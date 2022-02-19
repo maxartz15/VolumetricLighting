@@ -4,12 +4,9 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 [ExecuteInEditMode]
-[RequireComponent (typeof(Camera))]
+[RequireComponent(typeof(Camera))]
 public class VolumetricFog : MonoBehaviour
 {
-	Material m_DebugMaterial;
-	[HideInInspector]
-	public Shader m_DebugShader;
 	[HideInInspector]
 	public Shader m_ShadowmapShader;
 	[HideInInspector]
@@ -24,11 +21,6 @@ public class VolumetricFog : MonoBehaviour
 	public Shader m_BlurShadowmapShader;
 	[HideInInspector]
 	public Texture2D m_Noise;
-	[HideInInspector]
-	public bool m_Debug = false;
-	[HideInInspector]
-	[Range(0.0f, 1.0f)]
-	public float m_Z = 1.0f;
 
 	[Header("Size")]
 	[MinValue(0.1f)]
@@ -43,7 +35,8 @@ public class VolumetricFog : MonoBehaviour
 	Vector3i m_ScatterNumThreads = new Vector3i(32, 2, 1);
 	RenderTexture m_VolumeInject;
 	RenderTexture m_VolumeScatter;
-	Vector3i m_VolumeResolution = new Vector3i(160, 90, 128);
+	[SerializeField]
+	private Vector3Int froxelResolution = new Vector3Int(160, 90, 128);
 	Camera m_Camera;
 
 	// Density
@@ -68,6 +61,18 @@ public class VolumetricFog : MonoBehaviour
 	public float m_AmbientLightIntensity = 0.0f;
 	public Color m_AmbientLightColor = Color.white;
 
+	[Header("Debug")]
+	private Material m_DebugMaterial;
+	[HideInInspector]
+	public Shader m_DebugShader;
+	[HideInInspector]
+	public bool m_Debug = false;
+	[HideInInspector]
+	[Range(0.0f, 1.0f)]
+	public float m_Z = 1.0f;
+	public int m_VolumeAA = 0;
+	public FilterMode m_FilterMode = FilterMode.Bilinear;
+
 	struct Vector3i
 	{
 		public int x, y, z;
@@ -90,43 +95,6 @@ public class VolumetricFog : MonoBehaviour
 	PointLightParams[] m_PointLightParams;
 	ComputeBuffer m_PointLightParamsCB;
 
-	struct TubeLightParams
-	{
-		public Vector3 start;
-		public float range;
-		public Vector3 end;
-		public float radius;
-		public Vector3 color;
-		float padding;
-	}
-
-	TubeLightParams[] m_TubeLightParams;
-	ComputeBuffer m_TubeLightParamsCB;
-
-	struct TubeLightShadowPlaneParams
-	{
-		public Vector4 plane0;
-		public Vector4 plane1;
-		public float feather0;
-		public float feather1;
-		float padding0;
-		float padding1;
-	}
-
-	TubeLightShadowPlaneParams[] m_TubeLightShadowPlaneParams;
-	ComputeBuffer m_TubeLightShadowPlaneParamsCB;
-
-	struct AreaLightParams
-	{
-		public Matrix4x4 mat;
-		public Vector4 pos;
-		public Vector3 color;
-		public float bounded;
-	}
-
-	AreaLightParams[] m_AreaLightParams;
-	ComputeBuffer m_AreaLightParamsCB;
-
 	struct FogEllipsoidParams
 	{
 		public Vector3 pos;
@@ -148,14 +116,14 @@ public class VolumetricFog : MonoBehaviour
 
 	ComputeBuffer m_DummyCB;
 
-	Camera cam{ get { if (m_Camera == null) m_Camera = GetComponent<Camera>(); return m_Camera; }}
+	Camera cam { get { if (m_Camera == null) m_Camera = GetComponent<Camera>(); return m_Camera; } }
 
 	float nearClip { get { return Mathf.Max(0, m_NearClip); } }
 	float farClip { get { return Mathf.Min(cam.farClipPlane, m_FarClipMax); } }
 
 	void ReleaseComputeBuffer(ref ComputeBuffer buffer)
 	{
-		if(buffer != null)
+		if (buffer != null)
 			buffer.Release();
 		buffer = null;
 	}
@@ -175,9 +143,6 @@ public class VolumetricFog : MonoBehaviour
 		DestroyImmediate(m_VolumeInject);
 		DestroyImmediate(m_VolumeScatter);
 		ReleaseComputeBuffer(ref m_PointLightParamsCB);
-		ReleaseComputeBuffer(ref m_TubeLightParamsCB);
-		ReleaseComputeBuffer(ref m_TubeLightShadowPlaneParamsCB);
-		ReleaseComputeBuffer(ref m_AreaLightParamsCB);
 		ReleaseComputeBuffer(ref m_FogEllipsoidParamsCB);
 		ReleaseComputeBuffer(ref m_DummyCB);
 		m_VolumeInject = null;
@@ -227,121 +192,12 @@ public class VolumetricFog : MonoBehaviour
 		m_InjectLightingAndDensity.SetBuffer(kernel, "_PointLights", m_PointLightParamsCB);
 	}
 
-	TubeLightShadowPlane.Params[] sppArr;
-
-	void SetUpTubeLightBuffers(int kernel)
-	{
-		int count = m_TubeLightParamsCB == null ? 0 : m_TubeLightParamsCB.count;
-		m_InjectLightingAndDensity.SetFloat("_TubeLightsCount", count);
-		if (count == 0)
-		{
-			// Can't not set the buffer
-			m_InjectLightingAndDensity.SetBuffer(kernel, "_TubeLights", m_DummyCB);
-			m_InjectLightingAndDensity.SetBuffer(kernel, "_TubeLightShadowPlanes", m_DummyCB);
-			return;
-		}
-
-		if (m_TubeLightParams == null || m_TubeLightParams.Length != count)
-			m_TubeLightParams = new TubeLightParams[count];
-
-		if (m_TubeLightShadowPlaneParams == null || m_TubeLightShadowPlaneParams.Length != count)
-			m_TubeLightShadowPlaneParams = new TubeLightShadowPlaneParams[count];
-
-		HashSet<FogLight> fogLights = LightManagerFogLights.Get();
-
-		int j = 0;
-		for (var x = fogLights.GetEnumerator(); x.MoveNext();)
-		{
-			var fl = x.Current;
-			if (fl == null || fl.type != FogLight.Type.Tube || !fl.isOn)
-				continue;
-
-			TubeLight light = fl.tubeLight;
-			Transform t = light.transform;
-			Vector3 pos = t.position;
-			Vector3 halfLength = 0.5f * t.up * light.m_Length;
-
-			// Tube lights
-			m_TubeLightParams[j].start = pos + halfLength;
-			m_TubeLightParams[j].end = pos - halfLength;
-			float range = light.m_Range * fl.m_RangeMult;
-			m_TubeLightParams[j].range = 1.0f / (range * range);
-			m_TubeLightParams[j].color = new Vector3(light.m_Color.r, light.m_Color.g, light.m_Color.b) * light.m_Intensity * fl.m_IntensityMult;
-			m_TubeLightParams[j].radius = light.m_Radius;
-
-			// Tube light shadow planes
-			var p = light.GetShadowPlaneParams(ref sppArr);
-			m_TubeLightShadowPlaneParams[j].plane0 = p[0].plane;
-			m_TubeLightShadowPlaneParams[j].plane1 = p[1].plane;
-			m_TubeLightShadowPlaneParams[j].feather0 = p[0].feather;
-			m_TubeLightShadowPlaneParams[j].feather1 = p[1].feather;
-
-			j++;
-		}
-
-		m_TubeLightParamsCB.SetData(m_TubeLightParams);
-		m_InjectLightingAndDensity.SetBuffer(kernel, "_TubeLights", m_TubeLightParamsCB);
-		m_TubeLightShadowPlaneParamsCB.SetData(m_TubeLightShadowPlaneParams);
-		m_InjectLightingAndDensity.SetBuffer(kernel, "_TubeLightShadowPlanes", m_TubeLightShadowPlaneParamsCB);
-	}
-
-	void SetUpAreaLightBuffers(int kernel)
-	{
-		int count = m_AreaLightParamsCB == null ? 0 : m_AreaLightParamsCB.count;
-		m_InjectLightingAndDensity.SetFloat("_AreaLightsCount", count);
-		if (count == 0)
-		{
-			// Can't not set the buffers/textures
-			m_InjectLightingAndDensity.SetBuffer(kernel, "_AreaLights", m_DummyCB);
-			m_InjectLightingAndDensity.SetTexture(kernel, "_AreaLightShadowmap", Texture2D.whiteTexture);
-			return;
-		}
-
-		if (m_AreaLightParams == null || m_AreaLightParams.Length != count)
-			m_AreaLightParams = new AreaLightParams[count];
-
-		HashSet<FogLight> fogLights = LightManagerFogLights.Get();
-
-		int shadowedAreaLightIndex = -1;
-		int j = 0;
-		for (var x = fogLights.GetEnumerator(); x.MoveNext();)
-		{
-			var fl = x.Current;
-			if (fl == null || fl.type != FogLight.Type.Area || !fl.isOn)
-				continue;
-
-			AreaLight light = fl.areaLight;
-
-			m_AreaLightParams[j].mat = light.GetProjectionMatrix(true);
-			m_AreaLightParams[j].pos = light.GetPosition();
-			m_AreaLightParams[j].color = new Vector3(light.m_Color.r, light.m_Color.g, light.m_Color.b) * light.m_Intensity * fl.m_IntensityMult;
-			m_AreaLightParams[j].bounded = fl.m_Bounded ? 1 : 0;
-
-			if (fl.m_Shadows)
-			{
-				RenderTexture shadowmap = light.GetBlurredShadowmap();
-				if (shadowmap != null)
-				{
-					m_InjectLightingAndDensity.SetTexture(kernel, "_AreaLightShadowmap", shadowmap);
-					m_InjectLightingAndDensity.SetFloat("_ESMExponentAreaLight", fl.m_ESMExponent);
-					shadowedAreaLightIndex = j;
-				}
-			}
-
-			j++;
-		}
-		m_AreaLightParamsCB.SetData(m_AreaLightParams);
-		m_InjectLightingAndDensity.SetBuffer(kernel, "_AreaLights", m_AreaLightParamsCB);
-		m_InjectLightingAndDensity.SetFloat("_ShadowedAreaLightIndex", shadowedAreaLightIndex < 0 ? fogLights.Count : shadowedAreaLightIndex);
-		if (shadowedAreaLightIndex < 0)
-			m_InjectLightingAndDensity.SetTexture(kernel, "_AreaLightShadowmap", Texture2D.whiteTexture);
-	}
-
 	void SetUpFogEllipsoidBuffers(int kernel)
 	{
 		int count = 0;
 		HashSet<FogEllipsoid> fogEllipsoids = LightManagerFogEllipsoids.Get();
-		for (var x = fogEllipsoids.GetEnumerator(); x.MoveNext();) {
+		for (var x = fogEllipsoids.GetEnumerator(); x.MoveNext();)
+		{
 			var fe = x.Current;
 			if (fe != null && fe.enabled && fe.gameObject.activeSelf)
 				count++;
@@ -370,7 +226,7 @@ public class VolumetricFog : MonoBehaviour
 			m_FogEllipsoidParams[j].pos = t.position;
 			m_FogEllipsoidParams[j].radius = fe.m_Radius * fe.m_Radius;
 			m_FogEllipsoidParams[j].axis = -t.up;
-			m_FogEllipsoidParams[j].stretch = 1.0f/fe.m_Stretch - 1.0f;
+			m_FogEllipsoidParams[j].stretch = 1.0f / fe.m_Stretch - 1.0f;
 			m_FogEllipsoidParams[j].density = fe.m_Density;
 			m_FogEllipsoidParams[j].noiseAmount = fe.m_NoiseAmount;
 			m_FogEllipsoidParams[j].noiseSpeed = fe.m_NoiseSpeed;
@@ -446,19 +302,29 @@ public class VolumetricFog : MonoBehaviour
 		m_dirLightDir[1] = dir.y;
 		m_dirLightDir[2] = dir.z;
 		m_InjectLightingAndDensity.SetFloats("_DirLightDir", m_dirLightDir);
-		
+
 	}
 
 	float[] m_fogParams;
 	float[] m_windDir;
 	float[] m_ambientLight;
+	float[] m_froxelResolution;
 
 	void SetUpForScatter(int kernel)
 	{
 		SanitizeInput();
 		InitResources();
 		SetFrustumRays();
-		
+
+		if (m_froxelResolution == null)
+		{
+			m_froxelResolution = new float[3];
+			m_froxelResolution[0] = froxelResolution.x;
+			m_froxelResolution[1] = froxelResolution.y;
+			m_froxelResolution[2] = froxelResolution.z;
+		}
+		m_Scatter.SetFloats("_FroxelResolution", m_froxelResolution);
+		m_InjectLightingAndDensity.SetFloats("_FroxelResolution", m_froxelResolution);
 		// Compensate for more light and density being injected in per world space meter when near and far are closer.
 		// TODO: Not quite correct yet.
 		float depthCompensation = (farClip - nearClip) * 0.01f;
@@ -489,7 +355,7 @@ public class VolumetricFog : MonoBehaviour
 		m_windDir[2] = windDir.z;
 		m_InjectLightingAndDensity.SetFloats("_WindDir", m_windDir);
 		m_InjectLightingAndDensity.SetFloat("_Time", Time.time);
-		m_InjectLightingAndDensity.SetFloat("_NearOverFarClip", nearClip/farClip);
+		m_InjectLightingAndDensity.SetFloat("_NearOverFarClip", nearClip / farClip);
 		Color ambient = m_AmbientLightColor * m_AmbientLightIntensity * 0.1f;
 		m_ambientLight[0] = ambient.r;
 		m_ambientLight[1] = ambient.g;
@@ -497,8 +363,6 @@ public class VolumetricFog : MonoBehaviour
 		m_InjectLightingAndDensity.SetFloats("_AmbientLight", m_ambientLight);
 
 		SetUpPointLightBuffers(kernel);
-		SetUpTubeLightBuffers(kernel);
-		SetUpAreaLightBuffers(kernel);
 		SetUpFogEllipsoidBuffers(kernel);
 		SetUpDirectionalLight(kernel);
 	}
@@ -506,16 +370,15 @@ public class VolumetricFog : MonoBehaviour
 	void Scatter()
 	{
 		// Inject lighting and density
-		int kernel = 0;
-
+		int kernel = m_InjectLightingAndDensity.FindKernel("CSMain");
 		SetUpForScatter(kernel);
-
-		m_InjectLightingAndDensity.Dispatch(kernel, m_VolumeResolution.x/m_InjectNumThreads.x, m_VolumeResolution.y/m_InjectNumThreads.y, m_VolumeResolution.z/m_InjectNumThreads.z);
+		m_InjectLightingAndDensity.Dispatch(kernel, froxelResolution.x / m_InjectNumThreads.x, froxelResolution.y / m_InjectNumThreads.y, froxelResolution.z / m_InjectNumThreads.z);
 
 		// Solve scattering
-		m_Scatter.SetTexture(0, "_VolumeInject", m_VolumeInject);
-		m_Scatter.SetTexture(0, "_VolumeScatter", m_VolumeScatter);
-		m_Scatter.Dispatch(0, m_VolumeResolution.x/m_ScatterNumThreads.x, m_VolumeResolution.y/m_ScatterNumThreads.y, 1);
+		kernel = m_Scatter.FindKernel("CSMain");
+		m_Scatter.SetTexture(kernel, "_VolumeInject", m_VolumeInject);
+		m_Scatter.SetTexture(kernel, "_VolumeScatter", m_VolumeScatter);
+		m_Scatter.Dispatch(kernel, froxelResolution.x / m_ScatterNumThreads.x, froxelResolution.y / m_ScatterNumThreads.y, 1);
 	}
 
 	void DebugDisplay(RenderTexture src, RenderTexture dest)
@@ -535,7 +398,7 @@ public class VolumetricFog : MonoBehaviour
 	{
 		Shader.SetGlobalTexture("_VolumeScatter", m_VolumeScatter);
 		Shader.SetGlobalVector("_Screen_TexelSize", new Vector4(1.0f / width, 1.0f / height, width, height));
-		Shader.SetGlobalVector("_VolumeScatter_TexelSize", new Vector4(1.0f / m_VolumeResolution.x, 1.0f / m_VolumeResolution.y, 1.0f / m_VolumeResolution.z, 0));
+		Shader.SetGlobalVector("_VolumeScatter_TexelSize", new Vector4(1.0f / froxelResolution.x, 1.0f / froxelResolution.y, 1.0f / froxelResolution.z, 0));
 		Shader.SetGlobalFloat("_CameraFarOverMaxFar", cam.farClipPlane / farClip);
 		Shader.SetGlobalFloat("_NearOverFarClip", nearClip / farClip);
 	}
@@ -551,7 +414,7 @@ public class VolumetricFog : MonoBehaviour
 			return;
 		}
 
-		if(m_Debug)
+		if (m_Debug)
 		{
 			DebugDisplay(src, dest);
 			return;
@@ -573,7 +436,7 @@ public class VolumetricFog : MonoBehaviour
 
 	void OnPostRender()
 	{
-		VolumetricFogInForward(false);	
+		VolumetricFogInForward(false);
 	}
 
 	void VolumetricFogInForward(bool enable)
@@ -590,8 +453,8 @@ public class VolumetricFog : MonoBehaviour
 		return t.InverseTransformPoint(c.ViewportToWorldPoint(p));
 	}
 
-	static readonly Vector2[] frustumUVs = 
-		new Vector2[] {new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1)};
+	static readonly Vector2[] frustumUVs =
+		new Vector2[] { new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1) };
 	static float[] frustumRays = new float[16];
 
 	void SetFrustumRays()
@@ -603,10 +466,10 @@ public class VolumetricFog : MonoBehaviour
 		for (int i = 0; i < 4; i++)
 		{
 			Vector3 ray = cam.ViewportToWorldPoint(new Vector3(uvs[i].x, uvs[i].y, far)) - cameraPos;
-			frustumRays[i*4+0] = ray.x;
-			frustumRays[i*4+1] = ray.y;
-			frustumRays[i*4+2] = ray.z;
-			frustumRays[i*4+3] = 0;
+			frustumRays[i * 4 + 0] = ray.x;
+			frustumRays[i * 4 + 1] = ray.y;
+			frustumRays[i * 4 + 2] = ray.z;
+			frustumRays[i * 4 + 3] = 0;
 		}
 
 		m_InjectLightingAndDensity.SetVector("_CameraPos", cameraPos);
@@ -615,13 +478,15 @@ public class VolumetricFog : MonoBehaviour
 
 	void InitVolume(ref RenderTexture volume)
 	{
-		if(volume)
+		if (volume)
 			return;
 
-		volume = new RenderTexture (m_VolumeResolution.x, m_VolumeResolution.y, 0, RenderTextureFormat.ARGBHalf);
-		volume.volumeDepth = m_VolumeResolution.z;
+		volume = new RenderTexture(froxelResolution.x, froxelResolution.y, 0, RenderTextureFormat.ARGBHalf);
+		volume.volumeDepth = froxelResolution.z;
 		volume.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
 		volume.enableRandomWrite = true;
+		volume.antiAliasing = m_VolumeAA;
+		volume.filterMode = m_FilterMode;
 		volume.Create();
 	}
 
@@ -630,7 +495,7 @@ public class VolumetricFog : MonoBehaviour
 		if (buffer != null && buffer.count == count)
 			return;
 
-		if(buffer != null)
+		if (buffer != null)
 		{
 			buffer.Release();
 			buffer = null;
@@ -642,12 +507,11 @@ public class VolumetricFog : MonoBehaviour
 		buffer = new ComputeBuffer(count, stride);
 	}
 
-	void InitResources ()
+	void InitResources()
 	{
 		// Volume
 		InitVolume(ref m_VolumeInject);
 		InitVolume(ref m_VolumeScatter);
-
 
 		// Compute buffers
 		int pointLightCount = 0, tubeLightCount = 0, areaLightCount = 0;
@@ -660,21 +524,20 @@ public class VolumetricFog : MonoBehaviour
 
 			bool isOn = fl.isOn;
 
-			switch(fl.type)
+			switch (fl.type)
 			{
-				case FogLight.Type.Point: 	if (isOn) pointLightCount++; break;
-				case FogLight.Type.Tube: 	if (isOn) tubeLightCount++; break;
-				case FogLight.Type.Area: 	if (isOn) areaLightCount++; break;
+				case FogLight.Type.Point: if (isOn) pointLightCount++; break;
+				case FogLight.Type.Tube: if (isOn) tubeLightCount++; break;
+				case FogLight.Type.Area: if (isOn) areaLightCount++; break;
 			}
 		}
 
 		CreateBuffer(ref m_PointLightParamsCB, pointLightCount, Marshal.SizeOf(typeof(PointLightParams)));
-		CreateBuffer(ref m_TubeLightParamsCB, tubeLightCount, Marshal.SizeOf(typeof(TubeLightParams)));
-		CreateBuffer(ref m_TubeLightShadowPlaneParamsCB, tubeLightCount, Marshal.SizeOf(typeof(TubeLightShadowPlaneParams)));
-		CreateBuffer(ref m_AreaLightParamsCB, areaLightCount, Marshal.SizeOf(typeof(AreaLightParams)));
 		HashSet<FogEllipsoid> fogEllipsoids = LightManagerFogEllipsoids.Get();
 		CreateBuffer(ref m_FogEllipsoidParamsCB, fogEllipsoids == null ? 0 : fogEllipsoids.Count, Marshal.SizeOf(typeof(FogEllipsoidParams)));
 		CreateBuffer(ref m_DummyCB, 1, 4);
+
+		// 
 	}
 
 	void ReleaseTemporary(ref RenderTexture rt)
@@ -715,7 +578,7 @@ public class VolumetricFog : MonoBehaviour
 
 	public static string GetUnsupportedErrorMessage()
 	{
-		return "Volumetric Fog requires compute shaders and this platform doesn't support them. Disabling. \nDetected device type: " + 
+		return "Volumetric Fog requires compute shaders and this platform doesn't support them. Disabling. \nDetected device type: " +
 			SystemInfo.graphicsDeviceType + ", version: " + SystemInfo.graphicsDeviceVersion;
 	}
 }

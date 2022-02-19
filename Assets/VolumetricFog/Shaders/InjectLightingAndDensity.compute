@@ -1,15 +1,6 @@
-#pragma kernel CSMain TUBE_LIGHTS TUBE_LIGHT_SHADOW_PLANES FOG_ELLIPSOIDS ANISOTROPY AREA_LIGHTS POINT_LIGHTS
+#pragma kernel CSMain /*FOG_ELLIPSOIDS*/ ANISOTROPY POINT_LIGHTS DIR_LIGHT DIR_LIGHT_SHADOWS /*FOG_BOMB*/ /*ATTENUATION_LEGACY*/ 
 
-// Directional light support not quite ready yet
-// #pragma kernel CSMain TUBE_LIGHTS TUBE_LIGHT_SHADOW_PLANES FOG_ELLIPSOIDS ANISOTROPY AREA_LIGHTS POINT_LIGHTS DIR_LIGHT
-
-#define TUBE_LIGHT_ATTENUATION_LEGACY 1
-#include "..\..\TubeLight\Shaders\TubeLightAttenuation.cginc"
-
-#ifdef TUBE_LIGHT_SHADOW_PLANES
-	#include "..\..\TubeLight\Shaders\TubeLightShadowPlanes.cginc"
-#endif
-
+float3 _FroxelResolution;
 RWTexture3D<half4> _VolumeInject;
 float4 _FrustumRays[4];
 float4 _CameraPos;
@@ -30,6 +21,7 @@ Texture2D _LightTextureB0;
 SamplerState sampler_LightTextureB0;
 float _NearOverFarClip;
 float3 _AmbientLight;
+
 #ifdef FOG_BOMB
 float _FogBombRadius;
 float3 _FogBombPos;
@@ -63,43 +55,6 @@ struct PointLight
 };
 StructuredBuffer<PointLight> _PointLights;
 float _PointLightsCount;
-#endif
-
-#ifdef TUBE_LIGHTS
-struct TubeLight
-{
-	float3 start;
-	float range;
-	float3 end;
-	float radius;
-	float3 color;
-	float padding;
-};
-StructuredBuffer<TubeLight> _TubeLights;
-float _TubeLightsCount;
-
-#ifdef TUBE_LIGHT_SHADOW_PLANES
-// Same count as _TubeLightsCount
-StructuredBuffer<TubeLightShadowPlane> _TubeLightShadowPlanes;
-#endif
-
-#endif // TUBE_LIGHTS
-
-#ifdef AREA_LIGHTS
-struct AreaLight
-{
-	float4x4 mat;
-	float4 pos; // only needed for anisotropy. w: 0 ortho, 1 proj
-	float3 color;
-	float bounded;
-};
-StructuredBuffer<AreaLight> _AreaLights;
-float _AreaLightsCount;
-Texture2D _AreaLightShadowmap;
-SamplerState sampler_AreaLightShadowmap;
-float _ShadowedAreaLightIndex;
-float4 _AreaLightShadowmapZParams;
-float _ESMExponentAreaLight;
 #endif
 
 #ifdef FOG_ELLIPSOIDS
@@ -142,7 +97,7 @@ float noise(float3 x)
 	float3 f = frac(x);
 	f = f * f * (3.0 - 2.0 * f);
 	float2 uv = (p.xy + float2(37.0,17.0) * p.z) + f.xy;
-	float2 rg = _Noise.SampleLevel(sampler_Noise, (uv + 0.5) / 256.0, 0).yx;
+	float2 rg = _Noise.SampleLevel(sampler_Noise, (uv + 0.5) / 128.0, 0).yx;
 	return -1.0 + 2.0 * lerp(rg.x, rg.y, f.z);
 }
 
@@ -166,6 +121,58 @@ float ScrollNoise(float3 pos, float speed, float scale, float3 dir, float amount
 	f = max(f, 0.0);
 	return lerp(1.0, f, amount);
 }
+
+#if ATTENUATION_LEGACY
+
+float Attenuation(float distNorm)
+{
+	return 1.0 / (1.0 + 25.0 * distNorm);
+}
+
+float AttenuationToZero(float distNorm)
+{
+	float att = Attenuation(distNorm);
+
+	// Replicating unity light attenuation - pulled to 0 at range
+	// if (distNorm > 0.8 * 0.8)
+	// 		att *= 1 - (distNorm - 0.8 * 0.8) / (1 - 0.8 * 0.8);
+	// Same, simplified
+	float oneDistNorm = 1.0 - distNorm;
+	att *= lerp(1.0, oneDistNorm * 2.78, step(0.64, distNorm));
+
+	att *= step(0.0, oneDistNorm);
+
+	return att;
+}
+
+#else
+
+float Attenuation(float distSqr)
+{
+	float d = sqrt(distSqr);
+	float kDefaultPointLightRadius = 0.25;
+	return 1.0 / pow(1.0 + d / kDefaultPointLightRadius, 2);
+}
+
+float AttenuationToZero(float distSqr)
+{
+	// attenuation = 1 / (1 + distance_to_light / light_radius)^2
+	//             = 1 / (1 + 2*(d/r) + (d/r)^2)
+	// For more details see: https://imdoingitwrong.wordpress.com/2011/01/31/light-attenuation/
+	float d = sqrt(distSqr);
+	float kDefaultPointLightRadius = 0.25;
+	float atten = 1.0 / pow(1.0 + d / kDefaultPointLightRadius, 2);
+	float kCutoff = 1.0 / pow(1.0 + 1.0 / kDefaultPointLightRadius, 2); // cutoff equal to attenuation at distance 1.0
+
+	// Force attenuation to fall towards zero at distance 1.0
+	atten = (atten - kCutoff) / (1.f - kCutoff);
+	if (d >= 1.f)
+		atten = 0.f;
+
+	return atten;
+}
+
+#endif
 
 #ifdef FOG_ELLIPSOIDS
 void FogEllipsoids(float3 pos, inout float density)
@@ -245,9 +252,8 @@ float anisotropy(float costheta)
 }
 #endif
 
-#if AREA_LIGHTS || DIR_LIGHT_SHADOWS
-#define VSM 1
-#if VSM
+#if DIR_LIGHT
+#if DIR_LIGHT_SHADOWS
 float ChebyshevUpperBound(float2 moments, float mean)
 {
 	// Compute variance
@@ -260,13 +266,9 @@ float ChebyshevUpperBound(float2 moments, float mean)
 	float pMax = variance / (variance + (d * d));
 
 	// One-tailed Chebyshev
-	return (mean <= moments.x ? 1.0f : pMax);
+	return (mean >= moments.x ? 1.0f : pMax);
 }
-#endif
-#endif
 
-#if DIR_LIGHT
-#if DIR_LIGHT_SHADOWS
 float4 getCascadeWeights_splitSpheres(float3 pos)
 {
 	float3 fromCenter0 = pos - _ShadowParams[0].shadowSplitSpheres[0].xyz;
@@ -286,27 +288,22 @@ float4 getShadowCoord(float3 pos, float4 cascadeWeights)
 
 float3 DirectionalLight(float3 pos)
 {
-	if (!any(_DirLightColor))
-		return 0;
-
 	float att = 1;
 
 	#if DIR_LIGHT_SHADOWS
 	if (_DirLightShadows > 0.0)
 	{
 		float4 cascadeWeights = getCascadeWeights_splitSpheres(pos);
-		//bool inside = dot(cascadeWeights, float4(1,1,1,1)) < 4;
-		float3 samplePos = getShadowCoord(pos, cascadeWeights).xyz;
-		//occlusion += inside ? UNITY_SAMPLE_SHADOW(u_CascadedShadowMap, samplePos) : 1.f;
-		#if 1
-		att *= _DirectionalShadowmap.SampleLevel(sampler_DirectionalShadowmap, samplePos.xy, 0).r > samplePos.z;
-		#else
-		float2 shadowmap = _DirectionalShadowmap.SampleLevel(sampler_DirectionalShadowmap, samplePos, 0).xy;
-		att *= ChebyshevUpperBound(shadowmap.xy, samplePos.z);
-
-		// float depth = exp(-40.0 * samplePos.z);
-		// att = saturate(shadowmap.r * depth);
-		#endif
+		float4 samplePos = getShadowCoord(pos, cascadeWeights).xyzw;
+		//---
+		//att *= _DirectionalShadowmap.SampleLevel(sampler_DirectionalShadowmap, samplePos.xy, 0).r < samplePos.z;
+		//---
+		float2 shadowmap = _DirectionalShadowmap.SampleLevel(sampler_DirectionalShadowmap, samplePos.xy, 0).xy;
+		att *= ChebyshevUpperBound(shadowmap.xy, samplePos.z / samplePos.w);
+		//---
+		//float depth = exp(-40.0 * samplePos.z);
+		//att = saturate(shadowmap.r * depth);
+		//---
 	}
 	#endif
 
@@ -342,190 +339,27 @@ float3 PointLights(float3 pos)
 }
 #endif
 
-#ifdef TUBE_LIGHTS
-float almostIdentity(float x, float m, float n)
-{
-	if (x > m)
-		return x;
-
-	float a = 2.0f*n - m;
-	float b = 2.0f*m - 3.0f*n;
-	float t = x/m;
-
-	return (a*t + b)*t*t + n;
-}
-
-float3 TubeLights(float3 pos)
-{
-	float3 color = 0;
-	for (int i = 0; i < _TubeLightsCount; i++)
-	{
-		float3 L0 = _TubeLights[i].start - pos;
-		float3 L1 = _TubeLights[i].end - pos;
-		float distNorm = 0.5f * (length(L0) * length(L1) + dot(L0, L1)) * _TubeLights[i].range;
-		float att = Attenuation(distNorm);
-
-		#if ANISOTROPY
-		// Just like when calculating specular for area lights:
-		// assume forward scattering lobe -> the point on the light that's the closest to
-		// the view direction is representative
-		float3 posToCamera = normalize(pos - _CameraPos.xyz);
-		float3 r = -posToCamera;
-		float3 Ld = L1 - L0;
-		float L0oL0 = dot(L0, L0);
-		float RoL0 = dot(r, L0);
-		float RoLd = dot(r, Ld);
-		float L0oLd	= dot(L0, Ld);
-		float LdoLd = dot(Ld, Ld);
-		float distLd = sqrt(LdoLd);
-
-		#if 1
-			// Smallest angle to ray
-			float t = (L0oLd * RoL0 - L0oL0 * RoLd) / (L0oLd * RoLd - LdoLd * RoL0);
-			t = saturate(t);
-
-			// As r becomes parallel to Ld and then points away, t flips from 0 to 1 (or vv) and a discontinuity shows up.
-			// Counteract by detecting that relative angle/position and flip t. The discontinuity in t moves to the back side.
-			float3 L0xLd = cross(L0, Ld);
-			float3 LdxR = cross(Ld, r);
-			float RAtLd = dot(L0xLd, LdxR);
-
-			// RAtLd is negative if R points away from Ld.
-			// TODO: check if lerp below is indeed cheaper.
-			// if (RAtLd < 0)
-			// 	t = 1 - t;
-			t = lerp(1 - t, t, step(0, RAtLd));
-
-		#else
-			// Original by Karis
-			// Closest distance to ray
-			float t = (RoL0 * RoLd - L0oLd) / (distLd * distLd - RoLd * RoLd);
-			t = saturate(t);
-
-		#endif
-		float3 closestPoint = L0 + Ld * t;
-		float3 centerToRay = dot(closestPoint, r) * r - closestPoint;
-		// closestPoint = closestPoint + centerToRay * saturate(_TubeLights[i].radius / length(centerToRay));
-		float centerToRayNorm = length(centerToRay) / _TubeLights[i].radius;
-		// The last param should in theory be 1
-		centerToRayNorm = almostIdentity(centerToRayNorm, 2, 1.2);
-		closestPoint = closestPoint + centerToRay / centerToRayNorm;
-
-		// Attenuation from the closest point looks really good if there's anisotropy, but breaks
-		// for (close to) isotropic medium. Probably because there's no forward lobe anymore, so
-		// the closest point to the view direction is not representative? But artifacts look like
-		// smth else is going on too.
-		// att = Attenuation(dot(closestPoint, closestPoint) * _TubeLights[i].range);
-		
-		float costheta = dot(posToCamera, normalize(closestPoint));
-		att *= anisotropy(costheta);
-		#endif
-
-		#ifdef TUBE_LIGHT_SHADOW_PLANES
-		att *= ShadowPlanes(pos, _TubeLightShadowPlanes[i]);
-		#endif
-
-		// GDC hack
-		att = isnan(att) || isinf(att) ? 0 : att;
-
-		color += _TubeLights[i].color * att;
-	}
-	return color;
-}
-#endif
-
-#ifdef AREA_LIGHTS
-float3 AreaLights(float3 pos)
-{
-	float3 color = 0;
-	uint count = _AreaLightsCount;
-	uint shadowedAreaLightIndex = _ShadowedAreaLightIndex;
-	for (uint i = 0; i < count; i++)
-	{
-		float4 pClip = mul(_AreaLights[i].mat, float4(pos, 1));
-		float3 p = float3(pClip.x / pClip.w, pClip.y / pClip.w, pClip.z);
-		float z = p.z * 0.5 + 0.5;
-
-		float att = 1;
-
-		if (_AreaLights[i].bounded)
-		{
-			att *= saturate(AttenuationToZero(z * z));
-
-			// Magic tweaks to the shape
-			float corner = 0.4;
-			float outset = 0.8;
-			float smooth = 0.7;
-
-			float d = length(max(abs(p.xy) - 1 + corner*outset, 0.0)) - corner;
-			att *= saturate(1 - smoothstep(-smooth, 0, d));
-			att *= smoothstep(-0.01, 0.01, z);
-		}
-
-		#if ANISOTROPY
-		float3 cameraToPos = normalize(pos - _CameraPos.xyz);
-		float4 lightPos = _AreaLights[i].pos;
-		float3 posToLight = lerp(lightPos.xyz, lightPos.xyz - pos, lightPos.w);
-		float costheta = dot(cameraToPos, normalize(posToLight));
-		att *= anisotropy(costheta);
-		#endif
-
-		if (i == shadowedAreaLightIndex && all(abs(p) < 1))
-		{
-		#if VSM
-			float2 shadowmap = _AreaLightShadowmap.SampleLevel(sampler_AreaLightShadowmap, p.xy * 0.5 + 0.5, 0).xy;
-			att *= ChebyshevUpperBound(shadowmap.xy, z);
-		#else
-			float shadowmap = _AreaLightShadowmap.SampleLevel(sampler_AreaLightShadowmap, p.xy * 0.5 + 0.5, 0);
-			float depth = exp(-_ESMExponentAreaLight * z);
-			att *= saturate(shadowmap * depth);
-		#endif
-		}
-
-		color += _AreaLights[i].color * att;
-	}
-	return color;
-}
-#endif
-
-
 [numthreads(16,2,16)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
 	float3 color = _AmbientLight;
-	float2 uv = float2(id.x/159.0, id.y/89.0);
-	float z = id.z/127.0;
+	float2 uv = float2(id.x / (_FroxelResolution.x - 1), id.y / (_FroxelResolution.y - 1));
+	float z = id.z / (_FroxelResolution.z - 1);
 	z = _NearOverFarClip + z * (1 - _NearOverFarClip);
 	float3 pos = FrustumRay(uv, _FrustumRays) * z + _CameraPos.xyz;
-
 
 	// Directional light
 	#ifdef DIR_LIGHT
 	color += DirectionalLight(pos);
 	#endif
 
-	
 	// Point lights
 	#ifdef POINT_LIGHTS
 	color += PointLights(pos);
 	#endif
 
-
-	// Tube lights
-	#ifdef TUBE_LIGHTS
-	color += TubeLights(pos);
-	#endif
-
-
-	// Area lights
-	#ifdef AREA_LIGHTS
-	color += AreaLights(pos);
-	#endif
-
-
 	// Density
 	float density = Density(pos);
-
 
 	// Output
 	float4 output;
@@ -533,4 +367,3 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 	output.a = density;
 	_VolumeInject[id] = output;
 }
-

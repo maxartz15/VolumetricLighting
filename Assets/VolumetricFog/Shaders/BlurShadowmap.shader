@@ -98,7 +98,7 @@ Shader "Hidden/BlurShadowmap" {
 		z.b = tex2D (_DirShadowmap, i.uv22).r;
 		z.a = tex2D (_DirShadowmap, i.uv23).r;
 
-		return z.r;
+		// return z.r;
 
 		// Transform to linear z, 0 at near, 1 at far
 		// z = z * 2 - 1;

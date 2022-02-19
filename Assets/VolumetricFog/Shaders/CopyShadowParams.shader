@@ -6,7 +6,7 @@
 		{
 			CGPROGRAM
 			#pragma target 5.0
-			#pragma only_renderers d3d11
+			//#pragma only_renderers d3d11
 			#pragma vertex vert
 			#pragma fragment frag
 			#include "UnityCG.cginc"

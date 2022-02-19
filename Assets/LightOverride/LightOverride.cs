@@ -13,8 +13,6 @@ public abstract class LightOverride : MonoBehaviour
 	Type m_Type = Type.None;
 	bool m_Initialized = false;
 	Light m_Light;
-	TubeLight m_TubeLight;
-	AreaLight m_AreaLight;
 
 	public bool isOn
 	{
@@ -28,8 +26,6 @@ public abstract class LightOverride : MonoBehaviour
 			switch(m_Type)
 			{
 				case Type.Point: return m_Light.enabled || GetForceOn();
-				case Type.Tube: return m_TubeLight.enabled || GetForceOn();
-				case Type.Area: return m_AreaLight.enabled || GetForceOn();
 				case Type.Directional: return m_Light.enabled || GetForceOn();
 			}
 
@@ -40,12 +36,10 @@ public abstract class LightOverride : MonoBehaviour
 	}
 
 	new public Light light {get{Init(); return m_Light;} private set{}}
-	public TubeLight tubeLight {get{Init(); return m_TubeLight;} private set{}}
-	public AreaLight areaLight {get{Init(); return m_AreaLight;} private set{}}
 
 	public Type type {get{Init(); return m_Type;} private set{}}
 
-	// To get the "enabled" state checkbox
+	// To get the "enabled" state check box
 	void Update()
 	{
 
@@ -66,14 +60,6 @@ public abstract class LightOverride : MonoBehaviour
 				case LightType.Directional: m_Type = Type.Directional; break;
 				default: m_Type = Type.None; break;
 			}
-		}
-		else if ((m_TubeLight = GetComponent<TubeLight>()) != null)
-		{
-			m_Type = Type.Tube;
-		}
-		else if ((m_AreaLight = GetComponent<AreaLight>()) != null)
-		{
-			m_Type = Type.Area;
 		}
 
 		m_Initialized = true;

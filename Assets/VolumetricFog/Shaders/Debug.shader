@@ -44,8 +44,8 @@ CGPROGRAM
 	{
 		half depth = Linear01Depth(SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv));
 		
-		// return i.uv.xyyy;
-		return tex2D(_BoxLightShadowmap, i.uv);
+		//return i.uv.xyyy;
+		//return tex2D(_BoxLightShadowmap, i.uv);
 		//return log(tex2D(_ShadowmapBlurred, i.uv))/80.0;
 		return tex3D(_VolumeInject, half3(i.uv.x, i.uv.y, _Z)).a;// * tex2D(_MainTex, float2(i.uv.x, i.uv.y));
 	}
