@@ -79,7 +79,7 @@ public partial class FogLight : LightOverride
 		if (temp == null || temp.Length != downsampleSteps - 1)
 			temp = new int[downsampleSteps - 1];
 
-		for (int i = 0, currentRes = startRes/2; i < downsampleSteps; i++)
+		for (int i = 0, currentRes = startRes / 2; i < downsampleSteps; i++)
 		{
 			m_BufGrabShadowmap.SetGlobalVector("_TexelSize", new Vector4(0.5f/currentRes, 0.5f/currentRes, 0, 0));
 			
@@ -113,10 +113,17 @@ public partial class FogLight : LightOverride
 			currentRes /= 2;
 		}
 
-		//var directionalShadowmapBlurred = Shader.PropertyToID("_DirectionalShadowmapBlurred");
-		//m_BufGrabShadowmap.GetTemporaryRT(directionalShadowmapBlurred, 1024, 1024, 0, FilterMode.Bilinear, RenderTextureFormat.RFloat, RenderTextureReadWrite.Linear);
-		//m_BufGrabShadowmap.Blit(shadowmap, m_Shadowmap);
-		//m_BufGrabShadowmap.SetGlobalTexture(directionalShadowmapBlurred, directionalShadowmapBlurred);
+		RenderTexture blur = RenderTexture.GetTemporary(targetRes, targetRes, 0, format, RenderTextureReadWrite.Linear);
+		m_BufGrabShadowmap.SetGlobalVector("_TexelSize", new Vector4(1.0f / targetRes, 1.0f / targetRes, 0, 0));
+		m_BufGrabShadowmap.SetGlobalFloat("_BlurSize", m_BlurSize);
+
+		for (int i = 0; i < m_BlurIterations; i++)
+		{
+			m_BufGrabShadowmap.Blit(m_Shadowmap, blur, m_BlurShadowmapMaterial, 2);
+			m_BufGrabShadowmap.Blit(blur, m_Shadowmap, m_BlurShadowmapMaterial, 3);
+		}
+
+		blur.Release();
 	}
 
 	private Vector4 GetZParams()

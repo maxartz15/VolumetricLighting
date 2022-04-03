@@ -74,6 +74,13 @@ public class VolumetricFog : MonoBehaviour
 	[Range(0.0f, 1.0f)]
 	public float m_Z = 1.0f;
 
+	[SerializeField]
+	private float m_dirLightOffset;
+	[SerializeField]
+	private float m_vsmBias;
+	[SerializeField]
+	private float m_dirBias;
+
 	struct PointLightParams
 	{
 		public Vector3 pos;
@@ -292,7 +299,9 @@ public class VolumetricFog : MonoBehaviour
 		m_dirLightDir[1] = dir.y;
 		m_dirLightDir[2] = dir.z;
 		m_InjectLightingAndDensity.SetFloats("_DirLightDir", m_dirLightDir);
-
+		m_InjectLightingAndDensity.SetFloat("_DirLightOffset", m_dirLightOffset);
+		m_InjectLightingAndDensity.SetFloat("_VSMBias", m_vsmBias);
+		m_InjectLightingAndDensity.SetFloat("_DirBias", m_dirBias);
 	}
 
 	float[] m_fogParams;

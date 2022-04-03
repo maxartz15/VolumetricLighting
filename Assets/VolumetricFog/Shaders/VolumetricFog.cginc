@@ -29,6 +29,6 @@ half4 Fog(half linear01Depth, half2 screenuv)
 		return half4(0, 0, 0, 1);
 
 	half3 uvw = half3(screenuv.x, screenuv.y, z);
-	uvw.xy += cellNoise(uvw.xy * _Screen_TexelSize.zw) * _VolumeScatter_TexelSize.xy * 0.8;
+	//uvw.xy += cellNoise(uvw.xy * _Screen_TexelSize.zw) * _VolumeScatter_TexelSize.xy * 0.8;
 	return tex3D(_VolumeScatter, uvw);
 }

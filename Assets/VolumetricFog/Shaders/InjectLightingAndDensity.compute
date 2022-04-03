@@ -33,6 +33,10 @@ float3 _DirLightDir;
 #ifdef DIR_LIGHT_SHADOWS
 float _DirLightShadows;
 float _ESMExponentDirLight;
+float _DirLightOffset;
+float _VSMBias;
+float _DirBias;
+
 struct ShadowParams
 {
 	float4x4 worldToShadow[4];
@@ -258,7 +262,6 @@ float ChebyshevUpperBound(float2 moments, float mean)
 {
 	// Compute variance
 	float variance = moments.y - (moments.x * moments.x);
-	float _VSMBias = 0.001f;
 	variance = max(variance, _VSMBias * mean * mean);
 
 	// Compute probabilistic upper bound
@@ -298,12 +301,19 @@ float3 DirectionalLight(float3 pos)
 	if (_DirLightShadows > 0.0)
 	{
 		float4 cascadeWeights = getCascadeWeights_splitSpheres(pos);
-		float4 samplePos = getShadowCoord(pos, cascadeWeights).xyzw;
+
+		float3 spos = pos + (_DirLightDir * _DirLightOffset);
+
+		float4 samplePos = getShadowCoord(spos, cascadeWeights).xyzw;
 		//---
 		//att *= _DirectionalShadowmap.SampleLevel(sampler_DirectionalShadowmap, samplePos.xy, 0).r < samplePos.z;
 		//---
 		float2 shadowmap = _DirectionalShadowmap.SampleLevel(sampler_DirectionalShadowmap, samplePos.xy, 0).xy;
-		att *= ChebyshevUpperBound(shadowmap.xy, samplePos.z / samplePos.w);
+		float shadow = ChebyshevUpperBound(shadowmap.xy, samplePos.z / samplePos.w);
+
+		shadow = saturate(lerp(shadow, 1.0, _DirBias));
+
+		att = shadow;
 		//---
 		//float depth = exp(-40.0 * samplePos.z);
 		//att = saturate(shadowmap.r * depth);

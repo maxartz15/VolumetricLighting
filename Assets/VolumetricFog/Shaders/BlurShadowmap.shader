@@ -130,7 +130,7 @@ Shader "Hidden/BlurShadowmap" {
 	struct v2f
 	{
 		float4 pos : SV_POSITION;
-		half4 uv : TEXCOORD0;
+		half2 uv : TEXCOORD0;
 		half2 offs : TEXCOORD1;
 	};
 
@@ -139,9 +139,11 @@ Shader "Hidden/BlurShadowmap" {
 	v2f vertBlurHorizontal (appdata_img v)
 	{
 		v2f o;
-		o.pos = v.vertex;
+
+		o.pos = UnityObjectToClipPos(v.vertex);
+		//o.pos = v.vertex;
 		
-		o.uv = half4(v.texcoord.xy,1,1);
+		o.uv = v.texcoord;
 		o.offs = _TexelSize.xy * half2(1.0, 0.0) * _BlurSize;
 
 		return o; 
@@ -150,16 +152,19 @@ Shader "Hidden/BlurShadowmap" {
 	v2f vertBlurVertical (appdata_img v)
 	{
 		v2f o;
-		o.pos = v.vertex;
+
+		o.pos = UnityObjectToClipPos(v.vertex);
+		//o.pos = v.vertex;
 		
-		o.uv = half4(v.texcoord.xy, 1, 1);
+		o.uv = v.texcoord;
 		o.offs = _TexelSize.xy * half2(0.0, 1.0) * _BlurSize;
 		 
 		return o; 
 	}	
 
-	float4 fragBlur8 (v2f i) : SV_Target
+	float4 fragBlur8(v2f i) : SV_Target
 	{
+		//half2 coords = i.uv.xy;
 		half2 coords = i.uv.xy - i.offs * 5.0;  
 		
 		float4 color = 0;
