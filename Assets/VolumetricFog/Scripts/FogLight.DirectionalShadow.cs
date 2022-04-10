@@ -72,7 +72,7 @@ public partial class FogLight : LightOverride
 		RenderTextureFormat format = RenderTextureFormat.RGHalf;
 
 		ReleaseTemporary(ref m_Shadowmap);
-		m_Shadowmap = RenderTexture.GetTemporary(targetRes, targetRes, 0, format, RenderTextureReadWrite.Linear);
+		m_Shadowmap = RenderTexture.GetTemporary(targetRes, targetRes, 0, format, RenderTextureReadWrite.Linear, 8);
 		m_Shadowmap.filterMode = FilterMode.Bilinear;
 		m_Shadowmap.wrapMode = TextureWrapMode.Clamp;
 
@@ -88,7 +88,7 @@ public partial class FogLight : LightOverride
 			if (i < downsampleSteps - 1)
 			{
 				temp[i] = Shader.PropertyToID("ShadowmapDownscaleTemp" + i);
-				m_BufGrabShadowmap.GetTemporaryRT(temp[i], currentRes, currentRes, 0, FilterMode.Bilinear, format, RenderTextureReadWrite.Linear);
+				m_BufGrabShadowmap.GetTemporaryRT(temp[i], currentRes, currentRes, 0, FilterMode.Bilinear, format, RenderTextureReadWrite.Linear, 8);
 				targetRT = new RenderTargetIdentifier(temp[i]);
 			}
 			else
